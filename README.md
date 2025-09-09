@@ -1,4 +1,5 @@
 # 视频去重工具 video_dedup_tool
+<img width="1652" height="1036" alt="捕获" src="https://github.com/user-attachments/assets/7fdf899a-5dde-4dd1-84da-600e8c3ed32e" />
 
 ## 简介
 
@@ -33,10 +34,10 @@
 ├── python/               # Python运行环境（已集成）
 │   ├── python.exe        # Python主程序
 │   └── ...
-├── video_dedup_tool.py   # 主程序文件
+│── video_dedup_tool.py   # 主程序文件
 ├── start.bat             # 推荐启动脚本
 ├── launch_tool.bat       # 备用启动脚本
-├── README.md             # 英文说明文档
+ ├── README.md             # 英文说明文档
 └── 使用说明.txt          # 中文说明文档
 ```
 
@@ -44,11 +45,11 @@
 
 ### 方法一：使用启动脚本（推荐）
 
-1. 双击运行 `start.bat` 文件
-2. 在弹出的界面中点击"浏览..."选择要处理的视频文件
+1. 双击运行 ``start.bat`` 文件
+2. 在弹出的界面中点击“浏览...”选择要处理的视频文件
 3. 设置输出文件保存位置
 4. 勾选需要的去重功能
-5. 点击"开始处理"按钮
+5. 点击“开始处理”按钮
 6. 处理完成后，会在指定位置生成处理后的视频文件
 
 ### 方法二：直接运行Python文件
