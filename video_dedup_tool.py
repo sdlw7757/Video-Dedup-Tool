@@ -127,7 +127,7 @@ class VideoDedupTool:
         
         # GitHub 仓库超链接（带 GitHub 标志，点击打开浏览器）
         github_frame = tk.Frame(title_frame, bg='#2c3e50')
-        github_frame.pack(pady=(0, 12))
+        github_frame.place(relx=1.0, rely=0.0, anchor='ne', x=-15, y=14)
         
         github_icon_label = None
         try:
