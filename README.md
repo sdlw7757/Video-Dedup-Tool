@@ -1,5 +1,6 @@
 # 视频去重工具 video_dedup_tool
-<img width="1676" height="977" alt="Video-Dedup-Tool-main" src="https://github.com/user-attachments/assets/c9e0f82c-5647-4f93-bfba-f9ed78db20db" />
+<img width="1666" height="942" alt="Video-Dedup-Tool-main" src="https://github.com/user-attachments/assets/004a8c81-be8e-4d98-8a7d-9c51233cb01a" />
+
 
 
 ## 简介
