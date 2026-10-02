@@ -20,8 +20,14 @@ class VideoDedupTool:
     def __init__(self, root):
         self.root = root
         self.root.title("视频去重工具 - Video Deduplication Tool")
-        # 将窗口大小调整为现在的一倍
-        self.root.geometry("1700x1500")
+        # 窗口大小自适应屏幕，避免在小屏幕上超出可见区域
+        screen_w = self.root.winfo_screenwidth()
+        screen_h = self.root.winfo_screenheight()
+        win_w = min(1700, screen_w - 80)
+        win_h = min(1500, screen_h - 80)
+        pos_x = max((screen_w - win_w) // 2, 0)
+        pos_y = max((screen_h - win_h) // 2, 0)
+        self.root.geometry(f"{win_w}x{win_h}+{pos_x}+{pos_y}")
         self.root.resizable(True, True)  # 允许调整窗口大小
         self.root.configure(bg='#f0f0f0')
         
@@ -99,7 +105,7 @@ class VideoDedupTool:
         """创建现代化界面组件"""
         # 主框架
         main_frame = tk.Frame(self.root, bg='#f0f0f0')
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=8)
         
         # 标题区域
         title_frame = tk.Frame(main_frame, bg='#2c3e50', relief=tk.RAISED, bd=0)
@@ -327,7 +333,7 @@ class VideoDedupTool:
         log_container = tk.Frame(log_frame, bg='#f0f0f0')
         log_container.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
-        self.log_text = tk.Text(log_container, height=8, font=('Consolas', 9), bg='#ffffff', fg='#2c3e50')
+        self.log_text = tk.Text(log_container, height=5, font=('Consolas', 9), bg='#ffffff', fg='#2c3e50')
         scrollbar = tk.Scrollbar(log_container, orient=tk.VERTICAL, command=self.log_text.yview)
         self.log_text.configure(yscrollcommand=scrollbar.set)
         
