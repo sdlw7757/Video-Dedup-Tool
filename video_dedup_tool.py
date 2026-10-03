@@ -30,6 +30,8 @@ class VideoDedupTool:
         pos_y = max((screen_h - win_h) // 2, 0)
         self.root.geometry(f"{win_w}x{win_h}+{pos_x}+{pos_y}")
         self.root.resizable(True, True)  # 允许调整窗口大小
+        # 窗口默认最大化（全屏）打开；仍可通过拖动标题栏或按钮手动调整大小
+        self.root.state('zoomed')
         self.root.configure(bg='#f0f0f0')
         
         # 获取项目根目录（提前计算，便于以绝对路径定位图标等资源）
@@ -61,14 +63,16 @@ class VideoDedupTool:
         
         # 新增功能变量
         self.mask_invert_var = tk.BooleanVar()  # 蒙版倒置
-        self.mask_invert_value = tk.DoubleVar(value=0.03)  # 蒙版倒置值，默认0.03
+        self.mask_invert_value = tk.DoubleVar(value=0.03)  # 蒙版透明度，默认0.03（0.03 = 3% 透明）
         self.frame_sampling_var = tk.BooleanVar()  # 视频抽针
         self.frame_sampling_value = tk.IntVar(value=5)  # 抽针间隔，默认5帧
         self.frame_sampling_random_var = tk.BooleanVar(value=True)  # 随机抽针间隔
+        self.crop_var = tk.BooleanVar()  # 随机裁剪缩放（裁剪 1%-3% 后缩放回原分辨率）
         
         # 高级选项
         self.randomize_var = tk.BooleanVar(value=True)  # 参数随机化（每个文件独立取值）
         self.audio_process_var = tk.BooleanVar()  # 音频基础处理（音量微调 + 重采样，不变调）
+        self.rounds_value = tk.IntVar(value=1)  # 处理轮数（多轮叠加，逐轮独立随机化）
         
         # 创建界面
         self.create_modern_widgets()
@@ -138,11 +142,11 @@ class VideoDedupTool:
         """创建现代化界面组件"""
         # 主框架
         main_frame = tk.Frame(self.root, bg='#f0f0f0')
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=8)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=6)
         
         # 标题区域
         title_frame = tk.Frame(main_frame, bg='#2c3e50', relief=tk.RAISED, bd=0)
-        title_frame.pack(fill=tk.X, pady=(0, 20))
+        title_frame.pack(fill=tk.X, pady=(0, 12))
         
         title_label = tk.Label(
             title_frame, 
@@ -204,7 +208,7 @@ class VideoDedupTool:
         
         # 文件列表区域
         file_frame = tk.LabelFrame(left_frame, text="文件列表", font=('Arial', 12, 'bold'), bg='#f0f0f0', fg='#2c3e50')
-        file_frame.pack(fill=tk.X, pady=(0, 8))
+        file_frame.pack(fill=tk.X, pady=(0, 6))
         
         # 工具栏
         toolbar = tk.Frame(file_frame, bg='#f0f0f0')
@@ -224,10 +228,10 @@ class VideoDedupTool:
         
         # 文件列表（Treeview）
         list_container = tk.Frame(file_frame, bg='#f0f0f0')
-        list_container.pack(fill=tk.X, padx=10, pady=(0, 8))
+        list_container.pack(fill=tk.X, padx=10, pady=(0, 6))
         
         self.file_tree = ttk.Treeview(list_container, columns=("name", "status"), show="headings",
-                                      height=4, selectmode="extended")
+                                      height=3, selectmode="extended")
         self.file_tree.heading("name", text="文件名")
         self.file_tree.heading("status", text="状态")
         self.file_tree.column("name", anchor=tk.W, width=420)
@@ -253,15 +257,16 @@ class VideoDedupTool:
         funcs = [
             ("水平镜像", "让视频进行左右镜像翻转", self.mirror_var),
             ("RGB偏移", "让视频RGB颜色通道按设置偏移", self.rgb_shift_var),
-            ("时间跳跃", "让视频中的帧进行周期性的变速波动", self.time_jump_var),
+            ("时间跳跃", "轻微调整帧率节奏（不插值重建，画质几乎无损）", self.time_jump_var),
             ("修改MD5值", "通过重新编码和添加元数据修改文件MD5值", self.md5_change_var),
-            ("蒙版倒置", "倒置视频透明度 (0-1)", self.mask_invert_var),
-            ("视频抽针", "每隔指定帧数抽取一帧", self.frame_sampling_var)
+            ("蒙版倒置", "降低画面透明度并叠加到黑底 (0-0.5)", self.mask_invert_var),
+            ("视频抽针", "每隔指定帧数抽掉 1 帧并自动补帧（时长、帧率保持不变，播放流畅）", self.frame_sampling_var),
+            ("随机裁剪", "随机裁剪 0.5%-1.5% 后 lanczos 缩放回原分辨率（分辨率不变，画质影响小）", self.crop_var)
         ]
         
         for name, desc, var in funcs:
             func_item_frame = tk.Frame(func_container, bg='#f0f0f0')
-            func_item_frame.pack(fill=tk.X, pady=3)
+            func_item_frame.pack(fill=tk.X, pady=2)
             
             checkbox = tk.Checkbutton(func_item_frame, variable=var, bg='#f0f0f0', activebackground='#f0f0f0')
             checkbox.pack(side=tk.LEFT)
@@ -276,7 +281,7 @@ class VideoDedupTool:
             if name == "蒙版倒置":
                 mask_frame = tk.Frame(func_item_frame, bg='#f0f0f0')
                 mask_frame.pack(side=tk.RIGHT, padx=(10, 0))
-                tk.Label(mask_frame, text="值:", font=('Arial', 9), bg='#f0f0f0').pack(side=tk.LEFT)
+                tk.Label(mask_frame, text="透明度:", font=('Arial', 9), bg='#f0f0f0').pack(side=tk.LEFT)
                 mask_entry = tk.Entry(mask_frame, textvariable=self.mask_invert_value, width=8, font=('Arial', 9))
                 mask_entry.pack(side=tk.LEFT, padx=(3, 0))
                 
@@ -306,10 +311,19 @@ class VideoDedupTool:
         ).pack(fill=tk.X)
         
         tk.Checkbutton(
-            adv_container, text="音频基础处理：音量微调 + 重采样（不改变音调与速度）",
+            adv_container, text="音频基础处理：音量微调 + 重采样 + 轻微频谱/相位扰动（不改变音调与速度）",
             variable=self.audio_process_var, bg='#f0f0f0', activebackground='#f0f0f0', anchor=tk.W,
             font=('Arial', 9), justify=tk.LEFT
         ).pack(fill=tk.X)
+        
+        # 处理轮数（多轮叠加，逐轮独立随机化，累计改变幅度）
+        rounds_frame = tk.Frame(adv_container, bg='#f0f0f0')
+        rounds_frame.pack(fill=tk.X, pady=(4, 0))
+        tk.Label(rounds_frame, text="处理轮数：", font=('Arial', 9), bg='#f0f0f0', anchor=tk.W).pack(side=tk.LEFT)
+        tk.Spinbox(rounds_frame, from_=1, to=3, textvariable=self.rounds_value, width=4,
+                   font=('Arial', 9)).pack(side=tk.LEFT)
+        tk.Label(rounds_frame, text="（1-3，轮数越多改动越大、耗时越长）", font=('Arial', 9),
+                 fg='#7f8c8d', bg='#f0f0f0', anchor=tk.W).pack(side=tk.LEFT, padx=(6, 0))
         
         # 处理按钮区域
         button_frame = tk.Frame(left_frame, bg='#f0f0f0')
@@ -395,7 +409,7 @@ class VideoDedupTool:
         log_container = tk.Frame(log_frame, bg='#f0f0f0')
         log_container.pack(fill=tk.BOTH, expand=True, padx=10, pady=8)
         
-        self.log_text = tk.Text(log_container, height=4, font=('Consolas', 9), bg='#ffffff', fg='#2c3e50')
+        self.log_text = tk.Text(log_container, height=2, font=('Consolas', 9), bg='#ffffff', fg='#2c3e50')
         scrollbar = tk.Scrollbar(log_container, orient=tk.VERTICAL, command=self.log_text.yview)
         self.log_text.configure(yscrollcommand=scrollbar.set)
         
@@ -417,7 +431,7 @@ class VideoDedupTool:
 支持批量添加文件/文件夹（递归扫描），每项显示处理状态。输出保存到源文件同目录，命名为 原名_dedup.扩展名，已存在时自动加序号避免覆盖。
 
 时间跳跃：
-让视频中的帧进行周期性的变速波动（肉眼看不到），通过使用minterpolate滤镜创建微妙的时间波动效果，在保持视频总时长不变的情况下，创建微妙的帧速率变化。
+让视频帧率节奏在源帧率 ±0.5% 内轻微波动（约每 2-3 秒少/多 1 帧），帧内容全部原样保留、不做插值重建，画质几乎无损，肉眼基本察觉不到变化。
 
 RGB偏移：
 让视频 RGB 颜色通道按设置偏移，达到换色目的。通过对RGB通道进行轻微的空间偏移来产生视觉差异。
@@ -429,16 +443,22 @@ RGB偏移：
 通过重新编码视频并添加随机元数据，规避平台重复检测。确保输出文件的MD5值与原文件不同。
 
 蒙版倒置：
-通过调整视频透明度来创建视觉变化效果。
+降低画面透明度并叠加到黑底（透明度值 0-0.5，0.03 表示 3% 透明），产生整体色调偏移。
+
+随机裁剪：
+随机裁掉画面 0.5%-1.5% 的边框后用 lanczos 缩放回原分辨率（分辨率保持不变），轻微改变构图与像素分布（对感知哈希影响较大）。比例收窄且用高质量缩放，避免画面被明显"推近"或放大变糊。
 
 视频抽针：
-通过抽取特定帧来创建视频变化，减少视频内容（保留原时间戳，不补帧）。
+每隔指定帧数抽掉 1 帧（如间隔 5 即每 5 帧抽掉 1 帧），随即用 minterpolate 插值把被抽掉的帧补回。输出与原片时长、帧率完全一致，播放流畅不卡顿，画面仅轻微柔化（快速运动时略有重影）。间隔越小变化越明显（如 2-3 变化较强、5 以上较轻微）。
 
 参数随机化：
-为每个文件独立在安全区间随机取值（CRF/GOP/B帧/RGB偏移/抽针间隔等），避免批量输出彼此相似。
+为每个文件独立在安全区间随机取值（CRF/GOP/B帧/RGB偏移/蒙版值/裁剪比例/抽针间隔/音频参数等），避免批量输出彼此相似。
+
+处理轮数：
+对同一文件串联执行多轮处理（1-3 轮），每轮重新独立随机化参数，累计放大与原片的差异。
 
 音频基础处理：
-仅做音量微调（volume）与重采样（aresample），不改变音调与播放速度。
+音量微调（volume）、重采样（aresample），并加入时变增益、轻微频谱整形与声道相位微移以扰动音频指纹；不改变音调与播放速度。
 """
         info_text.insert(tk.END, info_content)
         info_text.config(state='disabled')
@@ -566,7 +586,7 @@ RGB偏移：
         if not any([self.mirror_var.get(), self.rgb_shift_var.get(),
                     self.time_jump_var.get(), self.md5_change_var.get(),
                     self.mask_invert_var.get(), self.frame_sampling_var.get(),
-                    self.audio_process_var.get()]):
+                    self.crop_var.get(), self.audio_process_var.get()]):
             messagebox.showerror("错误", "请至少选择一个功能")
             return
         if not self._is_valid_binary(self.ffmpeg_path) or not self._is_valid_binary(self.ffprobe_path):
@@ -580,17 +600,22 @@ RGB偏移：
         try:
             mask_value = float(self.mask_invert_value.get())
             sampling_value = int(self.frame_sampling_value.get())
+            rounds_value = int(self.rounds_value.get())
         except (tk.TclError, ValueError):
-            messagebox.showerror("错误", "“蒙版倒置值”与“抽针间隔”必须是有效数字")
+            messagebox.showerror("错误", "“蒙版透明度”“抽针间隔”“处理轮数”必须是有效数字")
             return
-        if self.mask_invert_var.get() and not (0 < mask_value <= 1):
-            messagebox.showerror("错误", "蒙版倒置值需大于 0 且不超过 1")
+        if self.mask_invert_var.get() and not (0 < mask_value <= 0.5):
+            messagebox.showerror("错误", "蒙版透明度需大于 0 且不超过 0.5")
             return
         if self.frame_sampling_var.get() and sampling_value < 2:
             messagebox.showerror("错误", "抽针间隔必须是大于等于 2 的整数")
             return
+        if not (1 <= rounds_value <= 3):
+            messagebox.showerror("错误", "处理轮数必须是 1 到 3 之间的整数")
+            return
         self.mask_invert_value.set(mask_value)
         self.frame_sampling_value.set(sampling_value)
+        self.rounds_value.set(rounds_value)
 
         self.is_processing = True
         self.cancel_requested = False
@@ -691,7 +716,7 @@ RGB偏移：
                 return str(candidate)
             n += 1
 
-    def _build_params(self, source_fps=0.0):
+    def _build_params(self, source_fps=0.0, width=0, height=0, channels=0):
         """生成单个文件的处理参数（随机化开启时每个文件独立取值）"""
         r = self.randomize_var.get()
 
@@ -704,10 +729,10 @@ RGB偏移：
         else:
             rgb_offsets = (2, -1, 1, 1, -2, 2)
 
-        # 蒙版倒置值：在用户设定值附近轻微浮动（保持在 (0, 1] 合法区间）
-        mask_base = min(1.0, max(0.0001, float(self.mask_invert_value.get())))
+        # 蒙版透明度：用户设定值附近轻微浮动，控制在 (0, 0.5]
+        mask_base = min(0.5, max(0.0001, float(self.mask_invert_value.get())))
         if r:
-            mask = round(min(1.0, random.uniform(mask_base * 0.6, mask_base * 1.4)), 4)
+            mask = round(min(0.5, random.uniform(mask_base * 0.6, mask_base * 1.4)), 4)
         else:
             mask = round(mask_base, 4)
 
@@ -718,20 +743,45 @@ RGB偏移：
         else:
             sampling = sampling_base
 
-        # 时间跳跃以源帧率为基准（避免把 60fps 源砍成 30fps），随机化时加 ±1% 微抖动
+        # 时间跳跃以源帧率为基准（避免把 60fps 源砍成 30fps），随机化时加 ±0.5% 微抖动
+        # （抖动越小，minterpolate 重建的帧越少，画面越清晰）
         fps_base = source_fps if source_fps > 0 else 30.0
-        fps = round(fps_base * (random.uniform(0.99, 1.01) if r else 1.0), 3)
+        fps = round(fps_base * (random.uniform(0.995, 1.005) if r else 1.0), 3)
+
+        # 随机裁剪：裁掉 0.5%-1.5% 边框后用 lanczos 缩放回原分辨率（宽高均取偶数以适配 yuv420p）。
+        # 比例收窄 + lanczos 缩放，最大限度避免"画面被推近/放大变糊"的观感，分辨率保持不变。
+        crop = None
+        if self.crop_var.get() and width > 2 and height > 2:
+            ratio = random.uniform(0.005, 0.015) if r else 0.01
+            crop_w = max(2, int(width * (1 - ratio)) // 2 * 2)
+            crop_h = max(2, int(height * (1 - ratio)) // 2 * 2)
+            max_x = max(0, width - crop_w)
+            max_y = max(0, height - crop_h)
+            crop_x = (random.randint(0, max_x) if (r and max_x > 0) else max_x // 2) // 2 * 2
+            crop_y = (random.randint(0, max_y) if (r and max_y > 0) else max_y // 2) // 2 * 2
+            crop = (crop_w, crop_h, crop_x, crop_y, width // 2 * 2, height // 2 * 2)
 
         return {
-            "crf": int(pick(20, 26, 23)),
+            "crf": int(pick(18, 22, 20)),
             "gop": int(pick(48, 72, 60)),
             "bf": int(pick(1, 3, 2)),
             "fps": fps,
             "rgb_offsets": rgb_offsets,
             "mask": mask,
+            "crop": crop,
             "sampling": sampling,
             "audio_vol": round(pick(0.98, 1.02, 1.0), 4),
             "audio_sr": random.choice([44100, 48000]) if r else 48000,
+            # 音频指纹扰动参数（均不改变音调与速度）
+            "gain_depth": round(pick(0.008, 0.018, 0.0), 4),
+            "gain_period": round(pick(5.0, 15.0, 7.0), 2),
+            "gain_jitter": round(pick(0.004, 0.012, 0.0), 4),
+            "eq_freq": int(pick(400, 6000, 1200)),
+            "eq_gain": round(pick(0.4, 1.0, 0.0), 3),
+            "phase_ms": round(pick(1.0, 4.0, 0.0), 2),
+            "width": width,
+            "height": height,
+            "channels": channels,
         }
 
     def _file_md5(self, file_path):
@@ -743,19 +793,27 @@ RGB偏移：
         return hash_md5.hexdigest()
 
     def _probe_media(self, video_path):
-        """探测媒体信息：是否含音轨、源视频帧率"""
-        info = {"has_audio": False, "fps": 0.0}
+        """探测媒体信息：是否含音轨、音轨声道数、源视频帧率、分辨率与总时长"""
+        info = {"has_audio": False, "fps": 0.0, "width": 0, "height": 0,
+                "channels": 0, "duration": 0.0}
         try:
-            cmd = [self.ffprobe_path, '-v', 'error', '-show_streams', '-of', 'json', video_path]
+            cmd = [self.ffprobe_path, '-v', 'error', '-show_streams', '-show_format',
+                   '-of', 'json', video_path]
             result = subprocess.run(cmd, capture_output=True, text=True,
                                     encoding='utf-8', errors='replace')
             if result.returncode != 0 or not result.stdout.strip():
                 return info
 
-            for stream in json.loads(result.stdout).get("streams", []):
+            data = json.loads(result.stdout)
+            for stream in data.get("streams", []):
                 codec_type = stream.get("codec_type")
                 if codec_type == "audio":
                     info["has_audio"] = True
+                    if not info["channels"]:
+                        try:
+                            info["channels"] = int(stream.get("channels") or 0)
+                        except (TypeError, ValueError):
+                            info["channels"] = 0
                 elif codec_type == "video" and info["fps"] <= 0:
                     # 跳过内嵌封面图（attached_pic），它不是真正的视频流
                     if stream.get("disposition", {}).get("attached_pic", 0):
@@ -768,6 +826,17 @@ RGB偏移：
                             info["fps"] = float(num) / den_value
                     except (TypeError, ValueError):
                         info["fps"] = 0.0
+                    try:
+                        info["width"] = int(stream.get("width") or 0)
+                        info["height"] = int(stream.get("height") or 0)
+                    except (TypeError, ValueError):
+                        info["width"] = info["height"] = 0
+            # 总时长在 format 段，供进度条直接使用，避免再跑一次 ffprobe
+            fmt = data.get("format") or {}
+            try:
+                info["duration"] = float(fmt.get("duration") or 0)
+            except (TypeError, ValueError):
+                info["duration"] = 0.0
         except Exception as e:
             print(f"探测媒体信息失败: {e}")
         return info
@@ -775,43 +844,70 @@ RGB偏移：
     # 支持内嵌缩略图的容器
     SUPPORTED_THUMB_CONTAINERS = ('.mp4', '.mov', '.m4v', '.mkv')
 
+    def _temp_output_path(self, input_path, index):
+        """生成中间轮次的临时输出路径（与源文件同目录，复用同一容器）"""
+        p = Path(input_path)
+        stamp = self._generate_random_string(8)
+        return str(p.parent / f"{p.stem}_tmp{index}_{stamp}{p.suffix}")
+
     def _process_single(self, input_path, output_path):
-        """处理单个视频文件（工作线程）"""
-        media = self._probe_media(input_path)
-        has_audio = media["has_audio"]
-        params = self._build_params(media["fps"])
+        """处理单个视频文件（工作线程，支持多轮串联处理）"""
+        rounds = max(1, min(3, int(self.rounds_value.get())))
+        suffix = Path(output_path).suffix.lower()
 
-        self.log_message(f"输入文件: {input_path}")
-        self.log_message(f"输出文件: {output_path}")
-        self.log_message(
-            f"源帧率: {media['fps']:.3f} fps，音轨: {'有' if has_audio else '无'}"
-        )
-
-        # 是否需要嵌入缩略图（与主转码合并为一次 ffmpeg 调用，避免二次读写整个文件）
+        # 缩略图只从原始文件提取一次，并在最后一轮嵌入
         need_thumb = (
-            Path(output_path).suffix.lower() in self.SUPPORTED_THUMB_CONTAINERS
+            suffix in self.SUPPORTED_THUMB_CONTAINERS
             and any([self.mirror_var.get(), self.rgb_shift_var.get(),
                      self.time_jump_var.get(), self.md5_change_var.get(),
                      self.mask_invert_var.get(), self.frame_sampling_var.get(),
-                     self.audio_process_var.get() and has_audio])
+                     self.crop_var.get(), self.audio_process_var.get()])
         )
-        thumb_path = None
-        if need_thumb:
-            thumb_path = self._extract_thumbnail(input_path)
-            if thumb_path is None:
-                self.log_message("提取缩略图失败，本次不嵌入缩略图")
+        thumb_path = self._extract_thumbnail(input_path) if need_thumb else None
+        if need_thumb and thumb_path is None:
+            self.log_message("提取缩略图失败，本次不嵌入缩略图")
+
+        temp_files = []
+        self.log_message(f"输入文件: {input_path}")
+        self.log_message(f"输出文件: {output_path}（共 {rounds} 轮）")
 
         try:
-            self._run_single_ffmpeg(input_path, output_path, params, has_audio, thumb_path)
+            current = input_path
+            for rnd in range(1, rounds + 1):
+                if self.cancel_requested:
+                    raise Exception("任务已被取消")
+                is_last = (rnd == rounds)
+                media = self._probe_media(current)
+                params = self._build_params(media["fps"], media["width"],
+                                            media["height"], media["channels"])
+                audio_desc = f"有({media['channels']}声道)" if media["has_audio"] else "无"
+                self.log_message(
+                    f"--- 第 {rnd}/{rounds} 轮 | {media['width']}x{media['height']} "
+                    f"@ {media['fps']:.3f}fps | 音轨: {audio_desc} ---"
+                )
+                target = output_path if is_last else self._temp_output_path(input_path, rnd)
+                if not is_last:
+                    temp_files.append(target)
+                self._run_single_ffmpeg(current, target, params, media["has_audio"],
+                                        thumb_path if is_last else None,
+                                        apply_mirror=(rnd == 1),
+                                        duration=media.get("duration", 0.0))
+                if not os.path.exists(target) or os.path.getsize(target) == 0:
+                    raise Exception(f"第 {rnd} 轮输出文件未生成或为空（参数可能不合法）")
+                current = target
         finally:
+            # 清理中间轮次临时文件与缩略图
+            for tmp in temp_files:
+                if os.path.exists(tmp):
+                    try:
+                        os.remove(tmp)
+                    except OSError:
+                        pass
             if thumb_path and os.path.exists(thumb_path):
                 try:
                     os.remove(thumb_path)
                 except OSError:
                     pass
-
-        if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
-            raise Exception("输出文件未生成或为空（参数可能不合法）")
 
         # MD5 对比
         try:
@@ -823,9 +919,33 @@ RGB偏移：
         except Exception as e:
             self.log_message(f"计算MD5失败: {e}")
 
-        self.log_message("视频处理成功完成")
+        self.log_message(f"视频处理成功完成（共 {rounds} 轮）")
 
-    def _run_single_ffmpeg(self, input_path, output_path, params, has_audio, thumb_path):
+    def _build_audio_filter(self, params):
+        """构建音频滤镜链：音量微调 + 指纹扰动 + 重采样，全程不改变音调与播放速度"""
+        r = self.randomize_var.get()
+        vol = params["audio_vol"]
+        parts = []
+        if r and params["gain_depth"] > 0:
+            # 时变增益：慢周期波动 + 逐帧随机抖动，改变波形包络但不改变音调。
+            # if(isnan(t),0,t) 防止部分 ffmpeg 版本首帧 t 为 NaN 导致音量被置 0
+            parts.append(
+                f"volume='{vol}+{params['gain_depth']}*sin(2*PI*if(isnan(t),0,t)/{params['gain_period']})"
+                f"+{params['gain_jitter']}*(random(0)-0.5)':eval=frame"
+            )
+        else:
+            parts.append(f"volume={vol}")
+        if r and params["eq_gain"] > 0:
+            # 轻微频谱整形：改变频谱包络以扰动音频指纹
+            parts.append(f"equalizer=f={params['eq_freq']}:t=q:w=1:g={params['eq_gain']}")
+        if r and params["phase_ms"] > 0 and params["channels"] >= 2:
+            # 立体声相位微移：仅延迟第 0 声道，破坏声道间相位关系
+            parts.append(f"adelay=delays={params['phase_ms']}ms:all=0")
+        parts.append(f"aresample={params['audio_sr']}")
+        return ",".join(parts)
+
+    def _run_single_ffmpeg(self, input_path, output_path, params, has_audio, thumb_path,
+                           apply_mirror=True, duration=0.0):
         """组装并执行单次 ffmpeg 命令（含可选缩略图嵌入）"""
         cmd = [self.ffmpeg_path, '-y', '-i', input_path]
         if thumb_path:
@@ -833,7 +953,17 @@ RGB偏移：
 
         # 视频滤镜链
         filters = []
-        if self.mirror_var.get():
+
+        # 随机裁剪缩放放在链路最前，让后续滤镜在最终分辨率上工作；
+        # 用 lanczos 缩放回原分辨率，避免放大产生明显模糊
+        if params["crop"]:
+            cw, ch, cx, cy, sw, sh = params["crop"]
+            filters.append(f"crop={cw}:{ch}:{cx}:{cy}")
+            filters.append(f"scale={sw}:{sh}:flags=lanczos")
+            self.log_message(f"应用随机裁剪缩放 (裁剪 {cw}x{ch} @ {cx},{cy} → lanczos缩放回 {sw}x{sh})")
+
+        # 水平镜像是自逆变换（翻转两次会还原），多轮处理时只在首轮应用
+        if self.mirror_var.get() and apply_mirror:
             filters.append("hflip")
             self.log_message("应用水平镜像效果")
 
@@ -843,33 +973,56 @@ RGB偏移：
             self.log_message(f"应用RGB偏移效果 {params['rgb_offsets']}")
 
         if self.time_jump_var.get():
-            filters.append(
-                f"minterpolate=fps={params['fps']}:mi_mode=blend:mc_mode=aobmc:"
-                f"me_mode=bidir:mb_size=16:search_param=32"
+            # 时间跳跃：用 fps 滤镜把帧率节奏微调到源帧率 ±0.5%（约每 2-3 秒少/多 1 帧），
+            # 帧内容全部原样保留、不重建任何帧，画质几乎无损；
+            # 早期版本用 minterpolate 运动补偿插值，会重建每一帧导致画面发软
+            filters.append(f"fps={params['fps']}")
+            self.log_message(
+                f"应用时间跳跃效果 (轻微变速波动 → {params['fps']}fps，不插值，保持画质)"
             )
-            self.log_message("应用时间跳跃效果 (周期性变速波动)")
 
-        if self.mask_invert_var.get():
-            filters.append(f"colorchannelmixer=aa={params['mask']}")
-            self.log_message(f"应用蒙版倒置效果 (透明度: {params['mask']})")
-
+        # 视频抽针：每隔指定帧数抽掉 1 帧（保留其余帧），再通过 minterpolate 把
+        # 被抽掉的帧补回（插值），输出与原片时长、帧率完全一致且播放流畅，
+        # 不会出现帧间隔忽大忽小的卡顿，也不会把视频变成加速短片。
+        # 抽帧位置必须是每个文件一次性取定的常量（不能在 select 表达式里用
+        # random(0) 逐帧随机，否则抽帧位置完全随机，画面一卡一卡）。
         if self.frame_sampling_var.get():
             interval = params["sampling"]
             if self.frame_sampling_random_var.get():
-                filters.append(f"select='not(mod(n,{interval}+floor(random(0)*6)))'")
-                self.log_message(f"应用视频抽针效果 (随机间隔: {interval}-{interval + 5}帧)")
-            else:
-                filters.append(f"select='not(mod(n,{interval}))'")
-                self.log_message(f"应用视频抽针效果 (固定间隔: {interval}帧)")
+                interval += random.randint(0, 5)  # 随机间隔：每个文件独立取一次
+            filters.append(f"select='not(eq(mod(n,{interval}),{interval - 1}))'")
+            filters.append(f"minterpolate=fps={params['fps']}:mi_mode=blend")
+            self.log_message(
+                f"应用视频抽针效果 (间隔: {interval}帧，抽帧后补帧回 {params['fps']}fps，"
+                f"时长保持不变)"
+            )
+
+        # 蒙版倒置：alpha 通道在 yuv420p 输出中会被丢弃，因此改为在 RGB 平面按透明度
+        # 缩放颜色（等价于把画面以该透明度叠加到黑底），放在链路末尾避免多次色彩空间往返
+        if self.mask_invert_var.get():
+            alpha = round(1.0 - params["mask"], 4)
+            filters.append("format=gbrp")
+            filters.append(f"colorchannelmixer=rr={alpha}:gg={alpha}:bb={alpha}")
+            filters.append("format=yuv420p")
+            self.log_message(f"应用蒙版倒置效果 (透明度 {params['mask']} → 画面保留 {alpha})")
+
+        # yuv420p 需要偶数宽高：若源分辨率为奇数且未开启裁剪（裁剪已自动规整偶数），
+        # 先在链路最前把画面规整为偶数，否则 libx264 会因 "width not divisible by 2" 直接失败
+        if (not params.get("crop")
+                and (params.get("width", 0) % 2 or params.get("height", 0) % 2)
+                and (self.md5_change_var.get() or bool(filters))):
+            filters.insert(0, "scale=trunc(iw/2)*2:trunc(ih/2)*2")
+            self.log_message("源分辨率为奇数，已自动规整为偶数宽高以适配 yuv420p")
 
         if filters:
             # 有缩略图输入时，滤镜只能作用于第 0 个视频流，否则会应用到静态图片
             cmd.extend(['-filter:v:0' if thumb_path else '-vf', ','.join(filters)])
 
-        # 音频基础处理：仅音量微调 + 重采样，不改变音调与速度
+        # 音频基础处理：音量微调 + 重采样 + 指纹扰动，均不改变音调与速度
+        # （抽针为抽帧+补帧，视频时长不变，音频无需变速）
         audio_on = self.audio_process_var.get() and has_audio
         if audio_on:
-            af = f"volume={params['audio_vol']},aresample={params['audio_sr']}"
+            af = self._build_audio_filter(params)
             cmd.extend(['-af', af])
             self.log_message(f"应用音频处理: {af}")
         elif self.audio_process_var.get():
@@ -889,7 +1042,7 @@ RGB偏移：
                 vs = ':0' if thumb_path else ''
                 cmd.extend([
                     f'-c:v{vs}', 'libx264',
-                    f'-preset:v{vs}', 'ultrafast',
+                    f'-preset:v{vs}', 'veryfast',
                     f'-crf:v{vs}', str(params["crf"]),
                     f'-profile:v{vs}', 'high',
                     f'-pix_fmt:v{vs}', 'yuv420p',
@@ -912,14 +1065,18 @@ RGB偏移：
         if thumb_path:
             cmd.extend(['-c:v:1', 'mjpeg', '-disposition:v:1', 'attached_pic'])
 
-        # 使用 select 抽针时保留原时间戳，避免默认补帧导致抽针失效
+        # 抽针后 minterpolate 已输出固定帧率，显式 CFR 确保封装为恒定帧率
         if self.frame_sampling_var.get():
-            cmd.extend(['-fps_mode', 'vfr'])
+            cmd.extend(['-fps_mode', 'cfr'])
+
+        # mp4/mov/m4v 开启 faststart：把 moov 原子移到文件头，便于平台快速起播
+        if Path(output_path).suffix.lower() in ('.mp4', '.mov', '.m4v'):
+            cmd.extend(['-movflags', '+faststart'])
 
         cmd.append(output_path)
         self.log_message(f"执行命令: {' '.join(cmd)}")
 
-        self._run_ffmpeg_with_progress(cmd, input_path)
+        self._run_ffmpeg_with_progress(cmd, input_path, duration)
 
         if thumb_path:
             self.log_message("缩略图已随转码一并嵌入")
@@ -951,9 +1108,11 @@ RGB偏移：
                 pass
         return None
         
-    def _run_ffmpeg_with_progress(self, cmd, input_path):
+    def _run_ffmpeg_with_progress(self, cmd, input_path, duration=0.0):
         """运行 FFmpeg 并监控进度（只记录错误信息，避免进度行刷屏）"""
-        duration = self._get_video_duration(input_path)
+        # 优先使用探测阶段已取得的时长；拿不到时再单独调用 ffprobe 兜底
+        if duration <= 0:
+            duration = self._get_video_duration(input_path)
         if duration <= 0:
             self.log_message("无法获取视频时长，进度条使用不确定模式")
             self._post(self._start_indeterminate_progress)
@@ -1103,6 +1262,7 @@ RGB偏移：
         self.md5_change_var.set(True)   # 默认勾选
         self.mask_invert_var.set(False)
         self.frame_sampling_var.set(False)
+        self.crop_var.set(False)
         self.randomize_var.set(True)
         self.audio_process_var.set(False)
         
@@ -1110,6 +1270,7 @@ RGB偏移：
         self.mask_invert_value.set(0.03)
         self.frame_sampling_value.set(5)
         self.frame_sampling_random_var.set(True)
+        self.rounds_value.set(1)
         
         # 重置进度条
         self.progress['value'] = 0
